@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: questprint
+      POSTGRES_USER: questprint
+      POSTGRES_PASSWORD: questprint
+    ports:
+      - "5432:5432"
+    volumes:
+      - questprint_pg:/var/lib/postgresql/data
+volumes:
+  questprint_pg:
