@@ -1,0 +1,30 @@
+QuestPrint Railway Fix 0.3.1
+
+Fixed issues found in the uploaded Railway-ready package:
+
+1. Added the missing `consented` middleware in server.js.
+   - Requires granted `terms` and `privacy` consent before protected learning/class/objective/event/AI routes.
+   - AI personalization and research-data consent remain optional.
+
+2. Replaced the Express 5-incompatible `app.get('*', ...)` SPA fallback with an Express 5-compatible route.
+   - API 404s remain JSON responses.
+   - Non-API browser routes serve public/index.html.
+
+3. Bumped package version from 0.3.0 to 0.3.1.
+
+Railway deployment:
+- Keep the existing Postgres service.
+- Push these corrected files to the GitHub repository connected to Railway.
+- Railway should build a NEW deployment from the corrected commit.
+- Do not use Restart alone after changing code; Restart reuses the existing deployment image.
+- After deployment, check /api/health and the deployment logs.
+
+Existing environment variables remain unchanged:
+NODE_ENV=production
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+SESSION_SECRET=<your existing strong secret>
+OPENAI_API_KEY=<your server-side key>
+OPENAI_MODEL=gpt-5.6-luna
+TEACHER_INVITE_CODE=<optional>
+
+No database reset is required for these code fixes.

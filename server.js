@@ -60,8 +60,40 @@ async function initDb(){
     await query("INSERT INTO class_objectives(class_id,objective_id) VALUES($1,$2) ON CONFLICT DO NOTHING",[cls.rows[0].id,demoObj.rows[0].id]);
   }
 }
-function auth(req,res,next){ if(!req.session.user) return res.status(401).json({error:'Authentication required'}); next(); }
-function role(role){ return (req,res,next)=>{ if(req.session.user?.role!==role) return res.status(403).json({error:`${role} role required`}); next(); }; }
+function auth(req,res,next){ 
+  if(!req.session.user) return res.status(401).json({error:'Authentication required'}); 
+  next(); 
+}
+
+// Required consent middleware. Terms and Privacy Notice consent are required
+// before accessing learner, class, objective, event, or AI-personalization data.
+// AI personalization and research-data consent remain optional.
+async function consented(req,res,next){
+  try{
+    const r=await query(
+      "SELECT consent_type FROM privacy_consents WHERE user_id=$1 AND consent_type IN ('terms','privacy') AND granted=true GROUP BY consent_type",
+      [req.session.user.id]
+    );
+    const granted=new Set(r.rows.map(x=>x.consent_type));
+    if(!granted.has('terms') || !granted.has('privacy')){
+      return res.status(403).json({
+        error:'Required Terms and Privacy Notice consent has not been provided.',
+        consentRequired:true
+      });
+    }
+    next();
+  }catch(e){
+    console.error('Consent check failed:',e);
+    res.status(500).json({error:'Could not verify privacy consent.'});
+  }
+}
+
+function role(role){ 
+  return (req,res,next)=>{ 
+    if(req.session.user?.role!==role) return res.status(403).json({error:`${role} role required`}); 
+    next(); 
+  }; 
+}
 
 app.get('/api/health',async(req,res)=>{ try{await query('SELECT 1');res.json({ok:true,service:'QuestPrint',database:'postgresql',aiConfigured:Boolean(process.env.OPENAI_API_KEY)});}catch(e){res.status(503).json({ok:false,database:'unavailable'});} });
 app.post('/api/auth/register',async(req,res)=>{
@@ -138,5 +170,8 @@ app.post('/api/events',auth,consented,role('student'),async(req,res)=>{ const {t
 const openai=process.env.OPENAI_API_KEY?new OpenAI({apiKey:process.env.OPENAI_API_KEY}):null;
 app.post('/api/ai/quest',auth,consented,role('student'),async(req,res)=>{ if(!openai)return res.status(503).json({error:'OPENAI_API_KEY is not configured on the server.'}); const pref=await query('SELECT ai_personalization_enabled FROM privacy_preferences WHERE user_id=$1',[req.session.user.id]); if(pref.rowCount && !pref.rows[0].ai_personalization_enabled)return res.status(403).json({error:'AI personalization is disabled in your privacy settings.'}); const {objectiveId}=req.body||{}; if(!objectiveId)return res.status(400).json({error:'objectiveId is required'}); const o=await query('SELECT * FROM curriculum_objectives WHERE id=$1 AND published=true',[objectiveId]); if(!o.rowCount)return res.status(404).json({error:'Published objective not found'}); const l=await query('SELECT u.name,l.xp,l.streak FROM users u JOIN learners l ON l.user_id=u.id WHERE u.id=$1',[req.session.user.id]); const s=await query('SELECT skill,score FROM skills WHERE learner_id=$1',[req.session.user.id]); const objective=o.rows[0]; const learner={...l.rows[0],skills:Object.fromEntries(s.rows.map(x=>[x.skill,x.score]))}; const system=`You are QuestPrint's curriculum-safe quest designer for K-12 learners. Generate one playful adaptive mission from the teacher-authored curriculum objective. Do not diagnose, rank, shame, or make intelligence claims. Preserve the teacher objective. Include productive recovery after mistakes. Return JSON with exactly: title, mission, adaptive_rule, transfer_prompt, success_evidence, recovery_reward. Each field must be concise.`; try{const response=await openai.responses.create({model:process.env.OPENAI_MODEL||'gpt-5.6-luna',input:[{role:'system',content:system},{role:'user',content:JSON.stringify({objective:{title:objective.title,subject:objective.subject,grade:objective.grade_level,description:objective.description,evidence:objective.evidence_of_learning,difficulty:objective.difficulty},learner})}],text:{format:{type:'json_object'}}});const parsed=JSON.parse(response.output_text);await query('INSERT INTO learning_events(learner_id,objective_id,type,payload) VALUES($1,$2,$3,$4)',[req.session.user.id,objective.id,'ai_quest_generated',parsed]);res.json({objective,quest:parsed});}catch(e){console.error(e);res.status(502).json({error:'The AI service could not generate a valid quest.'});} });
 
-app.get('*',(req,res)=>res.sendFile(path.join(__dirname,'public','index.html')));
+app.get('/{*splat}',(req,res,next)=>{
+  if(req.path.startsWith('/api/')) return res.status(404).json({error:'API route not found'});
+  res.sendFile(path.join(__dirname,'public','index.html'));
+});
 initDb().then(()=>app.listen(PORT,()=>console.log(`QuestPrint pilot running on http://localhost:${PORT}`))).catch(err=>{console.error('Database initialization failed:',err);process.exit(1)});
